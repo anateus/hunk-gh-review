@@ -27,6 +27,11 @@
  * (authoritative — includes deletions); the note_created/note_edited events
  * are kept as a fallback when the session daemon is unreachable. GitHub
  * calls go through `gh`, so auth is whatever `gh auth status` says.
+ *
+ * Bonus: hunk's built-in `e` key (open file in editor) hard-errors with
+ * "$EDITOR is not set." when the variable is missing, so this extension sets
+ * $EDITOR for the session — config `editor` first, else $EDITOR/$VISUAL,
+ * git's editor, then a PATH default.
  */
 import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
 import type { ScrollBoxRenderable } from "@opentui/core";
@@ -39,6 +44,80 @@ import { spawn } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+/* ------------------------------------------------------------------ */
+/* Editor resolution for the built-in `e` key                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fallback editors, checked in order on PATH when nothing was configured.
+ * Terminal editors come first — they run anywhere, including over SSH and
+ * in headless sessions; GUI editors follow since they need a desktop.
+ * Within each group the most common names lead. This is a last resort for
+ * users who configured nothing — anyone with $EDITOR/$VISUAL/git's editor
+ * or the `editor` config key is never affected. Ordering is best-effort,
+ * not a recommendation: users who care set one of the options above and
+ * skip this list entirely.
+ */
+const DEFAULT_EDITOR_CANDIDATES = [
+  "editor", // platform convention (Debian alternatives, macOS /usr/bin/editor)
+  "vim", "nvim", "vi", // near-universal terminal editors
+  "nano", "micro", "emacs", // other common terminal editors
+  "hx", // helix
+  "code", // VS Code — the near-universal GUI editor
+  "zed", "subl", "idea", // common GUI editors (Zed, Sublime, IntelliJ)
+  "cursor", "devin-desktop", // agent-focused IDEs (Cursor IDE CLI, Devin Desktop IDE)
+];
+
+/** Resolve an editor command string ("/usr/bin/editor -w" keeps its args). */
+async function resolveEditor(cwd: string): Promise<string | null> {
+  // 1. An explicit $EDITOR is never overridden.
+  const explicit = process.env.EDITOR?.trim();
+  if (explicit) return explicit;
+  // 2. Honour $VISUAL, then git's editor (env var, then config).
+  const visual = process.env.VISUAL?.trim();
+  if (visual) return visual;
+  const gitEditor = process.env.GIT_EDITOR?.trim();
+  if (gitEditor) return gitEditor;
+  try {
+    const configured = (await mustRun("git", ["config", "--get", "core.editor"], { cwd })).trim();
+    if (configured) return configured;
+  } catch {
+    // No git config / not a repo — fall through to the defaults.
+  }
+  // 3. First editor on PATH — terminal editors first (they run anywhere,
+  //    including over SSH), then common GUI editors. See the list's docs.
+  for (const candidate of DEFAULT_EDITOR_CANDIDATES) {
+    if (await hasOnPath(candidate)) return candidate;
+  }
+  return null;
+}
+
+function hasOnPath(program: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("sh", ["-c", `command -v "$1" >/dev/null 2>&1`, "sh", program]);
+    child.on("close", (code) => resolve(code === 0));
+    child.on("error", () => resolve(false));
+  });
+}
+
+/**
+ * Hunk's built-in `e` key opens the selected file via $EDITOR and hard-errors
+ * with "$EDITOR is not set." when the variable is absent. Set it once here so
+ * the key keeps working in shells that never exported it. Order: config
+ * `editor`, then $EDITOR, $VISUAL, git's editor, then a PATH default.
+ */
+async function ensureEditorEnv(cwd: string, configured: string | null, log: (message: string) => void): Promise<void> {
+  if (process.env.EDITOR?.trim()) return; // explicit $EDITOR wins, always
+  const editor: Promise<string | null> = configured ? Promise.resolve(configured) : resolveEditor(cwd);
+  const resolved = await editor;
+  if (resolved) {
+    process.env.EDITOR = resolved;
+    log(`resolved EDITOR="${resolved}" for the e key (set one explicitly to override)`);
+  } else if (configured === null) {
+    log("could not resolve an editor for the e key — set $EDITOR or [extension.gh-review] editor");
+  }
+}
 
 type Note = {
   filePath: string;
@@ -576,6 +655,11 @@ async function submitReview(ctx: ExtensionCommandContext, collected: Map<string,
 /* ------------------------------------------------------------------ */
 
 export default function (hunk: HunkExtensionAPI) {
+  // The e key needs $EDITOR; resolve it once, before any review starts.
+  const configuredEditor =
+    typeof hunk.config.editor === "string" && hunk.config.editor.trim() ? hunk.config.editor.trim() : null;
+  void ensureEditorEnv(process.cwd(), configuredEditor, (m) => hunk.log(m));
+
   // Fallback note collection, live from lifecycle events.
   const collected = new Map<string, Note>();
   const track = (note: { id: string; draft: boolean; filePath: string; side: "old" | "new"; line: number; body: string }) => {

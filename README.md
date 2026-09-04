@@ -87,6 +87,7 @@ Because the script sets the env vars, `S` submits to the branch under the lazygi
 - Notes are read from the live session via `hunk session comment list` (authoritative, sees deletions); the `note_created`/`note_edited` event stream is a fallback for when the session daemon is unreachable.
 - Rebind keys in hunk's config: `[keybindings]` with `"gh-review.submit"`, `"gh-review.threads"`, `"gh-review.reply"` mapped to your chords.
 - Pane placement is configurable via `[extension.gh-review]` in hunk's config: `placement = "right"` (default), `"left"`, `"top"`, or `"bottom"`.
+- Hunk's built-in `e` key (open file in editor) reads `$EDITOR` and fails with "$EDITOR is not set." when there is none. This extension sets it for the session so the key works without a per-shell export: to force one, set `editor` in `[extension.gh-review]` (e.g. `editor = "code"`); otherwise it uses `$EDITOR` if already set, then `$VISUAL`, then git's editor (`GIT_EDITOR` / `core.editor`), then a small built-in list of common editors on `PATH`.
 - **Narrow terminals:** hunk responsively omits panes that don't fit — a side pane needs the terminal width minus the review's minimum width to leave at least its `min` columns, and the built-in files sidebar claims its share first. If `T` opens nothing visible, use `placement = "bottom"` (it only needs 5 rows) or widen the terminal.
 
 ## Develop
