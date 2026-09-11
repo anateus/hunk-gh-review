@@ -535,11 +535,11 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
                   onMouseDown={() => navigateTo(thread)}
                 />
                 <box onMouseDown={() => navigateTo(thread)}>
-                  <CommentRows comment={thread.root} indent="  " width={width} theme={theme} maxLines={4} />
+                  <CommentRows comment={thread.root} indent="  " width={width} theme={theme} maxLines={active ? Infinity : 4} />
                 </box>
                 {thread.replies.map((reply) => (
                   <box key={reply.id} onMouseDown={() => navigateTo(thread)}>
-                    <CommentRows comment={reply} indent="   ↳ " width={width} theme={theme} maxLines={2} />
+                    <CommentRows comment={reply} indent="   ↳ " width={width} theme={theme} maxLines={active ? Infinity : 2} />
                   </box>
                 ))}
                 <text content="" style={{ bg: rowBg }} />
@@ -774,13 +774,15 @@ export default function (hunk: HunkExtensionAPI) {
     onExit: () => setThreadsState({ modeActive: false }),
   });
 
-  hunk.registerCommand({ id: "threads", title: "PR threads pane + keyboard mode", key: "T" }, (ctx) => {
+  hunk.registerCommand({ id: "threads", title: "PR threads pane + keyboard mode", key: "T" }, async (ctx) => {
     const willOpen = !ctx.panes.isOpen("threads");
     ctx.panes.toggle("threads");
     if (!willOpen) {
       if (ctx.keyboardModes.isActive("threads")) ctx.keyboardModes.exitMode();
       return;
     }
+    // A push can create the PR association without changing the watched diff.
+    await fetchThreads(ctx.cwd);
     if (snapshot.phase === "ready" && snapshot.threads.length > 0) {
       if (snapshot.activeThreadId == null) setThreadsState({ activeThreadId: snapshot.threads[0].root.id });
       ctx.keyboardModes.enterMode("threads");

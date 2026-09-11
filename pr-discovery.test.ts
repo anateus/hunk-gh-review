@@ -17,6 +17,7 @@ let commitPrs: any[];
 let calls: string[][];
 let comments: any[];
 let pane: any;
+let registeredCommands: Map<string, Function>;
 const originalEnv = { GH_PR_NUMBER: process.env.GH_PR_NUMBER, GH_PR_REPO: process.env.GH_PR_REPO, EDITOR: process.env.EDITOR };
 
 const react = { ...React };
@@ -73,6 +74,7 @@ function pr(number: number, sha = head, state = "open", baseRepo = repo) {
 
 async function refresh(): Promise<string[]> {
   const commands = new Map<string, Function>();
+  registeredCommands = commands;
   const messages: string[] = [];
   extension({
     config: { editor: "synthetic-editor" }, log() {}, on() {},
@@ -175,14 +177,15 @@ test("explicitly empty PR identity never falls back to the checkout", async () =
 
 test("outdated discussions and replies stay readable without jumping to obsolete lines", async () => {
   process.env.GH_PR_NUMBER = "218";
-  const root = { ...comments[0], line: null };
-  comments = [root, { ...root, id: 2, in_reply_to_id: 1, body: "Synthetic reply" },
+  const root = { ...comments[0], line: null, body: "Synthetic review thread\nSecond line\nThird line\nFourth line\nLast line of the finding" };
+  comments = [root, { ...root, id: 2, in_reply_to_id: 1, body: "Synthetic reply\nSecond reply line\nLast line of the reply" },
     { ...comments[0], id: 3, line: 20, body: "Current thread" }];
   await expectThreads(218);
   const revealed: unknown[][] = [];
-  const tree = pane({ files: [{ id: "file-1", path: "file.ts" }], width: 80, theme: {},
+  const props = { files: [{ id: "file-1", path: "file.ts" }], width: 80, theme: {},
     actions: { revealLine(...args: unknown[]) { revealed.push(args); } },
-  });
+  };
+  const tree = pane(props);
   function elements(node: any): any[] {
     if (node == null || typeof node !== "object") return [];
     if (Array.isArray(node)) return node.flatMap(elements);
@@ -196,6 +199,21 @@ test("outdated discussions and replies stay readable without jumping to obsolete
   expect(text).toContain("Synthetic reply");
   rows.find(row => row.props?.content === " file.ts:10 (outdated)").props.onMouseDown();
   expect(revealed).toEqual([]);
+  const expanded = elements(pane(props)).map(row => row.props?.content ?? "").join("\n");
+  expect(expanded).toContain("Last line of the finding");
+  expect(expanded).toContain("Last line of the reply");
   rows.find(row => row.props?.content === " file.ts:20").props.onMouseDown();
   expect(revealed).toEqual([["file-1", "new", 20]]);
+});
+
+test("opening threads retries discovery after a push creates the PR association", async () => {
+  expect(await refresh()).toContain("PR threads unavailable for this review");
+  commitPrs = [pr(218)];
+  let entered = false;
+  await registeredCommands.get("threads")!({ cwd, notify() {},
+    panes: { isOpen: () => false, toggle() {} },
+    keyboardModes: { enterMode() { entered = true; } },
+  });
+  expect(entered).toBe(true);
+  expect(calls.some(call => call[2] === `repos/${repo}/pulls/218/comments?per_page=100`)).toBe(true);
 });
