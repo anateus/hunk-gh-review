@@ -211,9 +211,43 @@ async function ghPrJson(args: string[], cwd: string, repo?: string): Promise<Tar
   return { number, title: rest.join("\t") };
 }
 
+/** Resolve an open PR without assuming the local branch has the remote name. */
+async function resolveCheckoutPr(cwd: string, repo: string): Promise<string | null> {
+  const branchResult = await run("git", ["symbolic-ref", "--quiet", "--short", "HEAD"], { cwd });
+  const branch = branchResult.code === 0 ? branchResult.stdout.trim() : "";
+  if (branch) {
+    const upstream = (await mustRun("git", [
+      "for-each-ref", "--format=%(upstream:remoteref)", `refs/heads/${branch}`,
+    ], { cwd })).trim().replace(/^refs\/heads\//, "");
+    // The tracking branch remains useful while local commits are not pushed yet.
+    for (const candidate of new Set([upstream, branch].filter(Boolean))) {
+      const matches: { number: number }[] = JSON.parse(await mustRun("gh", [
+        "pr", "list", "--head", candidate, "--state", "open", "--limit", "2",
+        "--json", "number", "-R", repo,
+      ], { cwd }));
+      if (matches.length > 1) return null;
+      if (matches.length === 1) return String(matches[0].number);
+    }
+  }
+
+  // A push such as HEAD:existing-pr may leave no tracking branch. GitHub's
+  // commit association also includes ancestor commits and closed PRs, so only
+  // accept one open PR whose current head is exactly this checkout's HEAD.
+  const head = (await mustRun("git", ["rev-parse", "HEAD"], { cwd })).trim();
+  const pages = JSON.parse(await mustRun("gh", [
+    "api", `repos/${repo}/commits/${head}/pulls`, "--paginate", "--slurp",
+  ], { cwd }));
+  const matches: { number: number; state: string; head: { sha: string }; base: { repo: { full_name: string } } }[] = pages.flat();
+  const numbers = new Set(matches.filter(pr =>
+    pr.state === "open" && pr.head.sha === head
+    && pr.base.repo.full_name.toLowerCase() === repo.toLowerCase(),
+  ).map(pr => String(pr.number)));
+  return numbers.size === 1 ? [...numbers][0] : null;
+}
+
 /**
  * Non-interactive target for the threads pane: env first, then the
- * checked-out branch's open PR; null when there is no sensible target.
+ * checkout's open PR; null when there is no unique target.
  */
 async function resolveTargetQuiet(cwd: string): Promise<{ repo: string; pr: string } | null> {
   const envPr = process.env.GH_PR_NUMBER?.trim();
@@ -224,8 +258,8 @@ async function resolveTargetQuiet(cwd: string): Promise<{ repo: string; pr: stri
     return /^\d+$/.test(envPr) ? { repo, pr: envPr } : null;
   }
   try {
-    const pr = (await mustRun("gh", ["pr", "view", "--json", "number", "--jq", ".number", "-R", repo], { cwd })).trim();
-    return { repo, pr };
+    const pr = await resolveCheckoutPr(cwd, repo);
+    return pr ? { repo, pr } : null;
   } catch {
     return null;
   }
@@ -263,14 +297,14 @@ async function resolveTargetPr(ctx: ExtensionCommandContext, repo: string): Prom
     return null;
   }
   try {
-    return await ghPrJson(["pr", "view"], ctx.cwd, repo);
+    const pr = await resolveCheckoutPr(ctx.cwd, repo);
+    if (pr) return await ghPrJson(["pr", "view", pr], ctx.cwd, repo);
   } catch {
-    ctx.notify(
-      "gh-review: no open PR for the checked-out branch — notes can only be submitted to a PR. Open one first (gh pr create).",
-      "warning",
-    );
+    ctx.notify("gh-review: PR lookup failed; check gh authentication and repository access", "error");
     return null;
   }
+  ctx.notify("gh-review: no unique open PR for this checkout; set GH_PR_NUMBER and GH_PR_REPO explicitly", "warning");
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -297,15 +331,15 @@ type ThreadsState = {
   repo?: string;
   pr?: TargetPr;
   threads: Thread[];
-  /** Comments dropped because they sit on outdated diff positions. */
-  skippedOutdated: number;
+  /** Discussions retained for reading after their diff positions become outdated. */
+  outdatedThreads: number;
   /** Thread root id last clicked or key-navigated to; the reply command targets it. */
   activeThreadId: number | null;
   /** True while the `threads` keyboard mode owns j/k navigation. */
   modeActive: boolean;
 };
 
-let snapshot: ThreadsState = { phase: "idle", threads: [], skippedOutdated: 0, activeThreadId: null, modeActive: false };
+let snapshot: ThreadsState = { phase: "idle", threads: [], outdatedThreads: 0, activeThreadId: null, modeActive: false };
 const listeners = new Set<() => void>();
 
 function setThreadsState(update: Partial<ThreadsState>) {
@@ -323,15 +357,14 @@ function useThreadsSnapshot(): ThreadsState {
   );
 }
 
-function groupThreads(comments: GhComment[]): { threads: Thread[]; skippedOutdated: number } {
-  const usable = comments.filter((c) => typeof c.line === "number");
-  const byId = new Map(usable.map((c) => [c.id, c]));
-  const roots = usable.filter((c) => !c.in_reply_to_id || !byId.has(c.in_reply_to_id));
+function groupThreads(comments: GhComment[]): { threads: Thread[]; outdatedThreads: number } {
+  const byId = new Map(comments.map((c) => [c.id, c]));
+  const roots = comments.filter((c) => !c.in_reply_to_id || !byId.has(c.in_reply_to_id));
   const threads: Thread[] = roots.map((root) => ({ root, replies: [] }));
   const threadOf = new Map<number, Thread>();
   for (const t of threads) threadOf.set(t.root.id, t);
   const byTime = (a: GhComment, b: GhComment) => a.created_at.localeCompare(b.created_at);
-  for (const c of usable.filter((c) => c.in_reply_to_id && byId.has(c.in_reply_to_id)).sort(byTime)) {
+  for (const c of comments.filter((c) => c.in_reply_to_id && byId.has(c.in_reply_to_id)).sort(byTime)) {
     // Walk up: a reply's in_reply_to_id may point at another reply.
     let cur: GhComment = c;
     while (cur.in_reply_to_id && byId.get(cur.in_reply_to_id)) {
@@ -345,7 +378,7 @@ function groupThreads(comments: GhComment[]): { threads: Thread[]; skippedOutdat
     }
   }
   threads.sort((a, b) => a.root.created_at.localeCompare(b.root.created_at));
-  return { threads, skippedOutdated: comments.length - usable.length };
+  return { threads, outdatedThreads: roots.filter(c => typeof c.line !== "number").length };
 }
 
 /** Move the active thread. No-op unless threads are loaded; clamps at the ends. */
@@ -364,7 +397,7 @@ async function fetchThreads(cwd: string, notify?: (message: string) => void): Pr
   setThreadsState({ phase: "loading", activeThreadId: null });
   const target = await resolveTargetQuiet(cwd);
   if (!target) {
-    setThreadsState({ phase: "no-pr", threads: [], skippedOutdated: 0 });
+    setThreadsState({ phase: "no-pr", threads: [], outdatedThreads: 0 });
     return;
   }
   try {
@@ -376,8 +409,8 @@ async function fetchThreads(cwd: string, notify?: (message: string) => void): Pr
     // not a flat list — flatten before grouping or every comment is dropped.
     const parsed = JSON.parse(commentsOut);
     const comments = (Array.isArray(parsed) && parsed.every(Array.isArray) ? parsed.flat() : parsed) as GhComment[];
-    const { threads, skippedOutdated } = groupThreads(comments);
-    setThreadsState({ phase: "ready", repo: target.repo, pr, threads, skippedOutdated });
+    const { threads, outdatedThreads } = groupThreads(comments);
+    setThreadsState({ phase: "ready", repo: target.repo, pr, threads, outdatedThreads });
     if (threads.length > 0) {
       notify?.(`PR #${pr.number}: ${threads.length} review thread${threads.length === 1 ? "" : "s"} — press T`);
     }
@@ -485,7 +518,7 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
         <>
           <text
             content={` PR #${state.pr!.number} · ${state.threads.length} thread${state.threads.length === 1 ? "" : "s"}${
-              state.skippedOutdated > 0 ? ` (${state.skippedOutdated} outdated hidden)` : ""
+              state.outdatedThreads > 0 ? ` (${state.outdatedThreads} outdated)` : ""
             }`}
             style={{ fg: theme.muted, bg: theme.panel }}
           />
@@ -495,7 +528,9 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
             return (
               <box key={thread.root.id} id={`thread-${thread.root.id}`} style={{ flexDirection: "column", backgroundColor: rowBg }}>
                 <text
-                  content={` ${thread.root.path}:${thread.root.line}`}
+                  content={` ${thread.root.path}:${thread.root.line ?? thread.root.original_line ?? "?"}${
+                    typeof thread.root.line !== "number" ? " (outdated)" : ""
+                  }`}
                   style={{ fg: theme.text, bg: rowBg }}
                   onMouseDown={() => navigateTo(thread)}
                 />
