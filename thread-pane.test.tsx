@@ -33,7 +33,7 @@ mock.module("node:child_process", () => ({
     return child;
   },
 }));
-const { default: extension } = await import("./index.tsx");
+const { default: extension } = await import("./dist/index.js");
 const env = { GH_PR_NUMBER: process.env.GH_PR_NUMBER, GH_PR_REPO: process.env.GH_PR_REPO, EDITOR: process.env.EDITOR };
 let screen: Awaited<ReturnType<typeof testRender>> | undefined;
 afterEach(() => {

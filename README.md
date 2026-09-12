@@ -118,11 +118,14 @@ Because the script sets the env vars, `S` submits to the branch under the lazygi
 
 ```bash
 pnpm install
+pnpm run build       # bundle the extension for Hunk's compiled loader
 pnpm test            # discovery, Markdown conversion, and native terminal rendering
 pnpm run typecheck   # tsc --noEmit against the shipped hunkdiff extension types
 ```
 
 (`hunkdiff` is a types-only devDependency — the hunk binary that runs the extension is your system install — so its bundled `bun` binary build script is disabled in `pnpm-workspace.yaml`.)
+
+The manifest loads the checked-in `dist/index.js` bundle. Rebuild after source changes and commit the updated bundle. React and OpenTUI stay external so the extension uses Hunk's own instances; parser dependencies are bundled because Hunk's compiled loader can fail to resolve transitive packages. The pane and command tests exercise this bundle.
 
 Test a change live: `hunk diff --extension ~/Code/hunk-gh-review` in any dirty repo.
 

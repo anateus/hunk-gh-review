@@ -62,7 +62,7 @@ mock.module("node:child_process", () => ({
   },
 }));
 
-const { default: extension } = await import("./index.tsx");
+const { default: extension } = await import("./dist/index.js");
 
 function git(...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
