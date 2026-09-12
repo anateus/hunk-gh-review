@@ -15,6 +15,8 @@ const comments = [
     user: { login: "review-bot" }, created_at: "2026-01-01T00:00:00Z" },
   { id: 2, in_reply_to_id: 1, path: "file.ts", line: null, original_line: 10, side: "RIGHT",
     body: "**Reply heading**\n\nLast line of the reply", user: { login: "author" }, created_at: "2026-01-02T00:00:00Z" },
+  { id: 3, in_reply_to_id: 1, path: "file.ts", line: null, original_line: 10, side: "RIGHT",
+    body: "Follow-up confirmed", user: { login: "review-bot" }, created_at: "2026-01-03T00:00:00Z" },
 ];
 mock.module("node:child_process", () => ({
   ...childProcess,
@@ -71,15 +73,15 @@ async function openPane(config = {}, width = 64, activate = true) {
   };
   await commands.get(activate ? "threads" : "refresh-threads")!(context);
   const theme = { text: "#dddddd", muted: "#999999", accent: "#88bbff", accentMuted: "#6699bb",
-    panel: "#111111", selectedHunk: "#222222" };
-  screen = await testRender(<Pane files={[]} width={width} theme={theme} actions={{}} />, { width, height: 45 });
+    panel: "#111111", panelAlt: "#181818", border: "#444444", selectedHunk: "#222222" };
+  screen = await testRender(<Pane files={[]} width={width} theme={theme} actions={{}} />, { width, height: 60 });
   await frameWith("PR threads");
   return { screen, commands, context };
 }
 
 test("native pane renders HTML badges and Markdown, then shows original source on toggle", async () => {
   const { screen, commands } = await openPane();
-  const rendered = await frameWith("Last line of the reply");
+  const rendered = await frameWith("Follow-up confirmed");
   expect(rendered).toContain("PR threads · Markdown");
   expect(rendered).toContain("P1 Review heading");
   expect(rendered).toContain("See the docs");
@@ -89,12 +91,17 @@ test("native pane renders HTML badges and Markdown, then shows original source o
   expect(rendered).toContain("<literal> &amp;");
   expect(rendered).toContain("Last line of the finding");
   expect(rendered).toContain("Last line of the reply");
+  expect(rendered).toContain("│ 2 replies");
+  expect(rendered).toContain("│ @author");
 
   await act(async () => commands.get("toggle-markdown")!({ notify() {} }));
   const raw = await frameWith("**Review heading**");
   expect(raw).toContain("PR threads · Raw");
   expect(raw).toContain('<a href="#"><img alt="P1"');
   expect(raw).toContain("**Review heading**");
+  expect(raw).toContain("│ 2 replies");
+  expect(raw).toContain("│ @author");
+  expect(raw).toContain("Follow-up confirmed");
   expect(raw).toContain("    <literal> &amp;"); // Two columns of indent plus two source spaces.
 
   await act(async () => commands.get("toggle-markdown")!({ notify() {} }));

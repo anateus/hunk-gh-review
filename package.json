@@ -1,6 +1,6 @@
 {
   "name": "hunk-gh-review",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Hunk extension: submit review notes as a GitHub PR review",
   "license": "MIT",
   "repository": "github:anateus/hunk-gh-review",

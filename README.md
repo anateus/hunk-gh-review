@@ -76,7 +76,7 @@ To start new sessions in raw mode, add this to `~/.config/hunk/config.toml`:
 render_markdown = false
 ```
 
-If that section already exists, add the setting to it. Select a thread to expand the full finding and its replies; inactive threads show short previews.
+If that section already exists, add the setting to it. Select a thread to expand the full finding and its replies; inactive threads show short previews. Both rendering modes use the same hierarchy: a divider and location header for each thread, bold author names, and replies grouped under an indented rail with separators between comments.
 
 ### Example launcher: lazygit + `hpr`
 

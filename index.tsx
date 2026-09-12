@@ -34,7 +34,7 @@
  * git's editor, then a PATH default.
  */
 import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
-import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core";
+import { SyntaxStyle, TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { renderCommentMarkdown } from "./comment-markdown";
 import type {
   ExtensionCommandContext,
@@ -428,34 +428,34 @@ async function fetchThreads(cwd: string, notify?: (message: string) => void): Pr
 
 function CommentRows({
   comment,
-  indent,
   width,
   theme,
+  background,
   maxLines,
   renderMarkdown,
   syntaxStyle,
 }: {
   comment: GhComment;
-  indent: string;
   width: number;
   theme: ExtensionPaneProps["theme"];
+  background: string;
   maxLines: number;
   renderMarkdown: boolean;
   syntaxStyle: SyntaxStyle;
 }): ReactNode {
   const author = `@${comment.user?.login ?? "ghost"}`;
-  const bodyWidth = Math.max(width - indent.length - 1, 10);
+  const bodyWidth = Math.max(width, 10);
   const markdown = useMemo(() => renderMarkdown ? renderCommentMarkdown(comment.body) : "", [comment.body, renderMarkdown]);
   return (
     <>
-      <text content={`${indent}${author}`} style={{ fg: theme.accent, bg: theme.panel }} />
-      <box marginLeft={indent.length} width={bodyWidth} maxHeight={Number.isFinite(maxLines) ? maxLines : undefined} overflow="hidden" flexShrink={0}>
+      <text content={author} attributes={TextAttributes.BOLD} style={{ fg: theme.text, bg: background }} />
+      <box marginTop={1} width={bodyWidth} maxHeight={Number.isFinite(maxLines) ? maxLines : undefined} overflow="hidden" flexShrink={0}>
         {renderMarkdown ? (
-          <markdown content={markdown} syntaxStyle={syntaxStyle} fg={theme.text} bg={theme.panel}
+          <markdown content={markdown} syntaxStyle={syntaxStyle} fg={theme.text} bg={background}
             conceal={true} concealCode={true} streaming={false} width="100%"
             tableOptions={{ style: "columns", widthMode: "full", wrapMode: "word" }} />
         ) : (
-          <text content={comment.body} wrapMode="word" width="100%" style={{ fg: theme.muted, bg: theme.panel }} />
+          <text content={comment.body} wrapMode="word" width="100%" style={{ fg: theme.text, bg: background }} />
         )}
       </box>
     </>
@@ -530,23 +530,36 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
             const active = thread.root.id === state.activeThreadId;
             const rowBg = active ? theme.selectedHunk : theme.panel;
             return (
-              <box key={thread.root.id} id={`thread-${thread.root.id}`} style={{ flexDirection: "column", backgroundColor: rowBg }}>
+              <box key={thread.root.id} id={`thread-${thread.root.id}`} marginTop={1} paddingBottom={1}
+                border={["top"]} borderColor={active ? theme.accent : theme.border}
+                style={{ flexDirection: "column", backgroundColor: theme.panel }}>
                 <text
                   content={` ${thread.root.path}:${thread.root.line ?? thread.root.original_line ?? "?"}${
                     typeof thread.root.line !== "number" ? " (outdated)" : ""
                   }`}
-                  style={{ fg: theme.text, bg: rowBg }}
+                  attributes={active ? TextAttributes.BOLD : undefined}
+                  style={{ fg: active ? theme.accent : theme.muted, bg: rowBg }}
                   onMouseDown={() => navigateTo(thread)}
                 />
-                <box onMouseDown={() => navigateTo(thread)}>
-                  <CommentRows comment={thread.root} indent="  " width={width} theme={theme} maxLines={active ? Infinity : 4} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
+                <box marginTop={1} marginLeft={2} marginRight={1} onMouseDown={() => navigateTo(thread)}>
+                  <CommentRows comment={thread.root} width={width - 3} theme={theme} background={theme.panel}
+                    maxLines={active ? Infinity : 4} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
                 </box>
-                {thread.replies.map((reply) => (
-                  <box key={reply.id} onMouseDown={() => navigateTo(thread)}>
-                    <CommentRows comment={reply} indent="   ↳ " width={width} theme={theme} maxLines={active ? Infinity : 2} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
+                {thread.replies.length > 0 ? (
+                  <box marginTop={1} marginLeft={2} marginRight={1} paddingLeft={1}
+                    border={["left"]} borderColor={active ? theme.accentMuted : theme.border}
+                    style={{ flexDirection: "column", backgroundColor: theme.panelAlt }}>
+                    <text content={`${thread.replies.length} ${thread.replies.length === 1 ? "reply" : "replies"}`}
+                      style={{ fg: theme.muted, bg: theme.panelAlt }} />
+                    {thread.replies.map((reply, index) => (
+                      <box key={reply.id} marginTop={1} onMouseDown={() => navigateTo(thread)}>
+                        {index > 0 ? <box border={["top"]} borderColor={theme.border} height={1} marginBottom={1} /> : null}
+                        <CommentRows comment={reply} width={width - 5} theme={theme} background={theme.panelAlt}
+                          maxLines={active ? Infinity : 2} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
+                      </box>
+                    ))}
                   </box>
-                ))}
-                <text content="" style={{ bg: rowBg }} />
+                ) : null}
               </box>
             );
           })}
