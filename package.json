@@ -1,6 +1,6 @@
 {
   "name": "hunk-gh-review",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Hunk extension: submit review notes as a GitHub PR review",
   "license": "MIT",
   "repository": "github:anateus/hunk-gh-review",
@@ -21,7 +21,8 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "bun scripts/build.mjs",
+    "postinstall": "bun scripts/build.mjs",
     "test": "pnpm run build && bun test pr-discovery.test.ts comment-markdown.test.ts && bun test thread-pane.test.tsx",
     "typecheck": "tsc --noEmit"
   },
