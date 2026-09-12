@@ -1,9 +1,9 @@
 {
   "name": "hunk-gh-review",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hunk extension: submit review notes as a GitHub PR review",
   "license": "MIT",
-  "repository": "github:phl28/hunk-gh-review",
+  "repository": "github:anateus/hunk-gh-review",
   "hunk": {
     "extensions": [
       "./index.tsx"
@@ -13,6 +13,7 @@
   "devDependencies": {
     "@opentui/core": "^0.5.4",
     "@opentui/react": "^0.5.4",
+    "@types/hast": "3.0.5",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.18",
     "hunkdiff": "^0.19.0",
@@ -20,7 +21,16 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "test": "bun test pr-discovery.test.ts",
+    "test": "bun test pr-discovery.test.ts comment-markdown.test.ts && bun test thread-pane.test.tsx",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "rehype-raw": "7.0.0",
+    "rehype-remark": "10.0.1",
+    "remark-gfm": "4.0.1",
+    "remark-parse": "11.0.0",
+    "remark-rehype": "11.1.2",
+    "remark-stringify": "11.0.0",
+    "unified": "11.0.5"
   }
 }

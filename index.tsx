@@ -33,8 +33,9 @@
  * $EDITOR for the session — config `editor` first, else $EDITOR/$VISUAL,
  * git's editor, then a PATH default.
  */
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
-import type { ScrollBoxRenderable } from "@opentui/core";
+import { useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core";
+import { renderCommentMarkdown } from "./comment-markdown";
 import type {
   ExtensionCommandContext,
   ExtensionPaneProps,
@@ -337,9 +338,11 @@ type ThreadsState = {
   activeThreadId: number | null;
   /** True while the `threads` keyboard mode owns j/k navigation. */
   modeActive: boolean;
+  /** Display preference only; fetched comment bodies always retain their source. */
+  renderMarkdown: boolean;
 };
 
-let snapshot: ThreadsState = { phase: "idle", threads: [], outdatedThreads: 0, activeThreadId: null, modeActive: false };
+let snapshot: ThreadsState = { phase: "idle", threads: [], outdatedThreads: 0, activeThreadId: null, modeActive: false, renderMarkdown: true };
 const listeners = new Set<() => void>();
 
 function setThreadsState(update: Partial<ThreadsState>) {
@@ -423,47 +426,38 @@ async function fetchThreads(cwd: string, notify?: (message: string) => void): Pr
 /* Threads pane component                                              */
 /* ------------------------------------------------------------------ */
 
-function wrapText(text: string, width: number): string[] {
-  const out: string[] = [];
-  for (const rawLine of text.split("\n")) {
-    const words = rawLine.split(/\s+/).filter(Boolean);
-    let cur = "";
-    for (const w of words) {
-      if (!cur) cur = w;
-      else if (`${cur} ${w}`.length <= width) cur += ` ${w}`;
-      else {
-        out.push(cur);
-        cur = w;
-      }
-    }
-    out.push(cur);
-  }
-  return out.length > 0 ? out : [""];
-}
-
 function CommentRows({
   comment,
   indent,
   width,
   theme,
   maxLines,
+  renderMarkdown,
+  syntaxStyle,
 }: {
   comment: GhComment;
   indent: string;
   width: number;
   theme: ExtensionPaneProps["theme"];
   maxLines: number;
+  renderMarkdown: boolean;
+  syntaxStyle: SyntaxStyle;
 }): ReactNode {
   const author = `@${comment.user?.login ?? "ghost"}`;
   const bodyWidth = Math.max(width - indent.length - 1, 10);
-  const lines = wrapText(comment.body, bodyWidth);
-  const clipped = lines.length > maxLines;
+  const markdown = useMemo(() => renderMarkdown ? renderCommentMarkdown(comment.body) : "", [comment.body, renderMarkdown]);
   return (
     <>
       <text content={`${indent}${author}`} style={{ fg: theme.accent, bg: theme.panel }} />
-      {(clipped ? [...lines.slice(0, maxLines), "…"] : lines).map((line, i) => (
-        <text key={i} content={`${indent}${line}`} style={{ fg: theme.muted, bg: theme.panel }} />
-      ))}
+      <box marginLeft={indent.length} width={bodyWidth} maxHeight={Number.isFinite(maxLines) ? maxLines : undefined} overflow="hidden" flexShrink={0}>
+        {renderMarkdown ? (
+          <markdown content={markdown} syntaxStyle={syntaxStyle} fg={theme.text} bg={theme.panel}
+            conceal={true} concealCode={true} streaming={false} width="100%"
+            tableOptions={{ style: "columns", widthMode: "full", wrapMode: "word" }} />
+        ) : (
+          <text content={comment.body} wrapMode="word" width="100%" style={{ fg: theme.muted, bg: theme.panel }} />
+        )}
+      </box>
     </>
   );
 }
@@ -471,6 +465,16 @@ function CommentRows({
 function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): ReactNode {
   const state = useThreadsSnapshot();
   const scrollRef = useRef<ScrollBoxRenderable | null>(null);
+  const syntaxStyle = useMemo(() => SyntaxStyle.fromStyles({
+    default: { fg: theme.text },
+    "markup.heading": { fg: theme.accent, bold: true },
+    "markup.strong": { bold: true },
+    "markup.italic": { italic: true },
+    "markup.strikethrough": { dim: true },
+    "markup.link": { fg: theme.accent, underline: true },
+    "markup.raw": { fg: theme.text },
+  }), [theme.text, theme.accent]);
+  useEffect(() => () => syntaxStyle.destroy(), [syntaxStyle]);
 
   const reveal = (thread: Thread) => {
     const file = files.find((f) => f.path === thread.root.path);
@@ -535,11 +539,11 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
                   onMouseDown={() => navigateTo(thread)}
                 />
                 <box onMouseDown={() => navigateTo(thread)}>
-                  <CommentRows comment={thread.root} indent="  " width={width} theme={theme} maxLines={active ? Infinity : 4} />
+                  <CommentRows comment={thread.root} indent="  " width={width} theme={theme} maxLines={active ? Infinity : 4} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
                 </box>
                 {thread.replies.map((reply) => (
                   <box key={reply.id} onMouseDown={() => navigateTo(thread)}>
-                    <CommentRows comment={reply} indent="   ↳ " width={width} theme={theme} maxLines={active ? Infinity : 2} />
+                    <CommentRows comment={reply} indent="   ↳ " width={width} theme={theme} maxLines={active ? Infinity : 2} renderMarkdown={state.renderMarkdown} syntaxStyle={syntaxStyle} />
                   </box>
                 ))}
                 <text content="" style={{ bg: rowBg }} />
@@ -569,7 +573,7 @@ function PrThreadsPane({ files, width, theme, actions }: ExtensionPaneProps): Re
       horizontalScrollbarOptions={{ visible: false }}
     >
       <box style={{ width: "100%", flexDirection: "column", backgroundColor: theme.panel }}>
-        <text content=" PR threads" style={{ fg: theme.accent, bg: theme.panel }} />
+        <text content={` PR threads · ${state.renderMarkdown ? "Markdown" : "Raw"}`} style={{ fg: theme.accent, bg: theme.panel }} />
         {state.modeActive ? (
           <text content=" j/k move · enter/esc back to diff" style={{ fg: theme.accentMuted, bg: theme.panel }} />
         ) : null}
@@ -690,6 +694,7 @@ async function submitReview(ctx: ExtensionCommandContext, collected: Map<string,
 /* ------------------------------------------------------------------ */
 
 export default function (hunk: HunkExtensionAPI) {
+  setThreadsState({ renderMarkdown: hunk.config.render_markdown !== false });
   // The e key needs $EDITOR; resolve it once, before any review starts.
   const configuredEditor =
     typeof hunk.config.editor === "string" && hunk.config.editor.trim() ? hunk.config.editor.trim() : null;
@@ -796,6 +801,11 @@ export default function (hunk: HunkExtensionAPI) {
   hunk.registerCommand({ id: "refresh-threads", title: "Refresh PR threads" }, async (ctx) => {
     await fetchThreads(ctx.cwd);
     ctx.notify(snapshot.phase === "ready" ? "PR threads refreshed" : "PR threads unavailable for this review", snapshot.phase === "ready" ? "info" : "warning");
+  });
+
+  hunk.registerCommand({ id: "toggle-markdown", title: "Toggle PR comment Markdown rendering", key: "alt+m" }, (ctx) => {
+    setThreadsState({ renderMarkdown: !snapshot.renderMarkdown });
+    ctx.notify(`PR comments: ${snapshot.renderMarkdown ? "Markdown" : "raw text"}`);
   });
 
   hunk.registerCommand({ id: "reply", title: "Reply to selected PR thread", key: "R" }, async (ctx) => {

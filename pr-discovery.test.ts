@@ -22,7 +22,7 @@ const originalEnv = { GH_PR_NUMBER: process.env.GH_PR_NUMBER, GH_PR_REPO: proces
 
 const react = { ...React };
 mock.module("react", () => ({
-  ...react, useEffect() {}, useRef: () => ({ current: null }),
+  ...react, useEffect() {}, useRef: () => ({ current: null }), useMemo: (factory: Function) => factory(),
   useSyncExternalStore: (_subscribe: unknown, getSnapshot: Function) => getSnapshot(),
 }));
 
@@ -72,12 +72,12 @@ function pr(number: number, sha = head, state = "open", baseRepo = repo) {
   return { number, state, head: { sha }, base: { repo: { full_name: baseRepo } } };
 }
 
-async function refresh(): Promise<string[]> {
+async function refresh(config: Record<string, unknown> = {}): Promise<string[]> {
   const commands = new Map<string, Function>();
   registeredCommands = commands;
   const messages: string[] = [];
   extension({
-    config: { editor: "synthetic-editor" }, log() {}, on() {},
+    config: { editor: "synthetic-editor", ...config }, log() {}, on() {},
     registerCommand(command: { id: string }, handler: Function) { commands.set(command.id, handler); },
     registerPane(config: any) { pane = config.component; }, registerKeyboardMode() {},
   } as any);
@@ -216,4 +216,39 @@ test("opening threads retries discovery after a push creates the PR association"
   });
   expect(entered).toBe(true);
   expect(calls.some(call => call[2] === `repos/${repo}/pulls/218/comments?per_page=100`)).toBe(true);
+});
+
+function renderedElements(node: any): any[] {
+  if (node == null || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(renderedElements);
+  if (typeof node.type === "function") return renderedElements(node.type(node.props));
+  return [node, ...renderedElements(node.props?.children)];
+}
+
+test("Markdown defaults on and toggles to the exact source without fetching again", async () => {
+  process.env.GH_PR_NUMBER = "218";
+  const body = '<a href="#"><img alt="P1" src="https://example.test/badge.svg"></a> **Finding**\n\n```ts\n  <literal> &amp;\n```';
+  comments[0].body = body;
+  await refresh();
+  const props = { files: [], width: 80, theme: {}, actions: {} };
+  const rows = () => renderedElements(pane(props));
+  expect(rows().find(row => row.type === "markdown").props.content).toContain("P1 **Finding**");
+  const fetches = calls.length;
+  registeredCommands.get("toggle-markdown")!({ notify() {} });
+  expect(rows().some(row => row.type === "markdown")).toBe(false);
+  expect(rows().find(row => row.props?.content === body)?.type).toBe("text");
+  expect(rows().some(row => row.props?.content?.includes?.("PR threads · Raw"))).toBe(true);
+  registeredCommands.get("toggle-markdown")!({ notify() {} });
+  expect(rows().some(row => row.type === "markdown")).toBe(true);
+  expect(comments[0].body).toBe(body);
+  expect(calls.length).toBe(fetches);
+});
+
+test("render_markdown=false starts in raw mode and can still be toggled", async () => {
+  process.env.GH_PR_NUMBER = "218";
+  await refresh({ render_markdown: false });
+  const props = { files: [], width: 80, theme: {}, actions: {} };
+  expect(renderedElements(pane(props)).some(row => row.type === "markdown")).toBe(false);
+  registeredCommands.get("toggle-markdown")!({ notify() {} });
+  expect(renderedElements(pane(props)).some(row => row.type === "markdown")).toBe(true);
 });
